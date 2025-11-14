@@ -1,15 +1,19 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { query } from "@/lib/db"
+import connectDB from "@/lib/db"
+import Question from "@/models/Question"
+import Submission from "@/models/Submission"
+import mongoose from "mongoose"
 
 export async function POST(request: NextRequest) {
   try {
+    await connectDB()
     const token = request.headers.get("Authorization")?.split(" ")[1]
 
     if (!token) {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 })
     }
 
-    let userId = 0
+    let userId: string = ""
     let userEmail = "unknown"
     try {
       const decodedToken = JSON.parse(Buffer.from(token, "base64").toString("utf-8"))
@@ -38,25 +42,24 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ message: "No answers provided" }, { status: 400 })
     }
 
-    // Convert question IDs to integers for database query
+    // Convert question IDs to MongoDB ObjectIds
     const questionIds = answeredQuestionIds
       .map((id) => {
-        const numId = parseInt(id, 10)
-        return isNaN(numId) ? null : numId
+        if (mongoose.Types.ObjectId.isValid(id)) {
+          return new mongoose.Types.ObjectId(id)
+        }
+        return null
       })
-      .filter((id) => id !== null) as number[]
+      .filter((id) => id !== null) as mongoose.Types.ObjectId[]
 
     if (questionIds.length === 0) {
       return NextResponse.json({ message: "Invalid question IDs" }, { status: 400 })
     }
 
     // Only fetch the questions that were actually answered
-    const placeholders = questionIds.map(() => "?").join(",")
-    const questionsResult = await query(
-      `SELECT id, correct_answer FROM questions WHERE id IN (${placeholders})`,
-      questionIds
-    )
-    const questions = questionsResult as any[]
+    const questions = await Question.find({
+      _id: { $in: questionIds },
+    }).select("_id correctAnswer")
 
     if (questions.length === 0) {
       return NextResponse.json({ message: "No valid questions found" }, { status: 400 })
@@ -65,12 +68,23 @@ export async function POST(request: NextRequest) {
     // Create a map for quick lookup (convert id to string for matching)
     const questionsMap = new Map<string, string>()
     questions.forEach((q) => {
-      questionsMap.set(String(q.id), String(q.correct_answer).toUpperCase().trim())
+      questionsMap.set(q._id.toString(), String(q.correctAnswer).toUpperCase().trim())
     })
 
-    // Calculate score based only on answered questions
+    // Get total number of questions in the database, or use answers length as fallback
+    let totalQuestions = await Question.countDocuments()
+    
+    // Fallback: if count is 0 or unavailable, use the number of questions in answers
+    if (totalQuestions === 0 && answers && typeof answers === "object") {
+      totalQuestions = Object.keys(answers).length
+    }
+    
+    if (totalQuestions === 0) {
+      return NextResponse.json({ message: "No questions found in database" }, { status: 400 })
+    }
+
+    // Calculate score based on correct answers
     let score = 0
-    let totalAnswered = 0
     
     Object.entries(answers).forEach(([questionId, selectedOption]) => {
       // Skip empty answers
@@ -78,7 +92,6 @@ export async function POST(request: NextRequest) {
         return
       }
 
-      totalAnswered++
       const correctAnswer = questionsMap.get(questionId)
       const userAnswer = String(selectedOption).toUpperCase().trim()
       
@@ -87,14 +100,18 @@ export async function POST(request: NextRequest) {
       }
     })
 
-    // Use the number of questions actually answered, not all questions in DB
-    const totalQuestions = totalAnswered > 0 ? totalAnswered : answeredQuestionIds.length
+    // Calculate percentage based on total questions in DB
     const percentage = totalQuestions > 0 ? (score / totalQuestions) * 100 : 0
 
-    await query(
-      "INSERT INTO submissions (user_id, email, score, total_questions, percentage, passed, answers) VALUES (?, ?, ?, ?, ?, ?, ?)",
-      [userId, userEmail, score, totalQuestions, percentage, percentage >= 50, JSON.stringify(answers)],
-    )
+    await Submission.create({
+      userId: new mongoose.Types.ObjectId(userId),
+      email: userEmail,
+      score,
+      totalQuestions,
+      percentage,
+      passed: percentage >= 50,
+      answers,
+    })
 
     return NextResponse.json({
       score,

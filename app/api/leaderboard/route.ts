@@ -1,5 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { query } from "@/lib/db"
+import connectDB from "@/lib/db"
+import Submission from "@/models/Submission"
 
 export async function GET(request: NextRequest) {
   try {
@@ -9,19 +10,19 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 })
     }
 
-    const results = await query(
-      `SELECT s.email, s.score, s.percentage, s.created_at 
-       FROM submissions s 
-       ORDER BY s.percentage DESC, s.score DESC`,
-    )
+    await connectDB()
+    const submissions = await Submission.find()
+      .select("email score totalQuestions percentage createdAt")
+      .sort({ percentage: -1, score: -1 })
 
-    const leaderboard = (results as any[]).map((submission, index) => ({
+    const leaderboard = submissions.map((submission, index) => ({
       rank: index + 1,
       name: submission.email.split("@")[0],
       email: submission.email,
       score: submission.score,
+      totalQuestions: submission.totalQuestions,
       percentage: submission.percentage,
-      date: new Date(submission.created_at).toLocaleDateString(),
+      date: new Date(submission.createdAt).toLocaleDateString(),
     }))
 
     return NextResponse.json(leaderboard)

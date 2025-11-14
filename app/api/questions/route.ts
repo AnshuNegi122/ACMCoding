@@ -1,5 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { query } from "@/lib/db"
+import connectDB from "@/lib/db"
+import Question from "@/models/Question"
 
 const optionKeys = ["A", "B", "C", "D"]
 
@@ -11,21 +12,20 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 })
     }
 
-    const results = await query(
-      "SELECT id, text, option_a as optionA, option_b as optionB, option_c as optionC, option_d as optionD, correct_answer as correctAnswer FROM questions",
-    )
+    await connectDB()
+    const questions = await Question.find().select("_id text optionA optionB optionC optionD correctAnswer")
 
-    const questions = (results as any[]).map((q) => ({
-      id: q.id.toString(),
+    const formattedQuestions = questions.map((q) => ({
+      id: q._id.toString(),
       text: q.text,
-      options: optionKeys.map((key, index) => ({
+      options: optionKeys.map((key) => ({
         key,
         value: q[`option${key}` as "optionA" | "optionB" | "optionC" | "optionD"],
       })),
       correctAnswer: q.correctAnswer,
     }))
 
-    return NextResponse.json(questions)
+    return NextResponse.json(formattedQuestions)
   } catch (error: any) {
     console.error("[v0] Questions error:", error)
     const errorMessage = error?.message || "Internal server error"
@@ -53,6 +53,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ message: "Forbidden: Admin access required" }, { status: 403 })
     }
 
+    await connectDB()
     const body = await request.json()
     const { text, options, correctAnswer } = body
 
@@ -75,29 +76,24 @@ export async function POST(request: NextRequest) {
     const trimmedText = text.trim()
     const [optionA, optionB, optionC, optionD] = options.map((opt: string) => opt.trim())
 
-    const result: any = await query(
-      "INSERT INTO questions (text, option_a, option_b, option_c, option_d, correct_answer) VALUES (?, ?, ?, ?, ?, ?)",
-      [trimmedText, optionA, optionB, optionC, optionD, correctAnswer],
-    )
+    const insertedQuestion = await Question.create({
+      text: trimmedText,
+      optionA,
+      optionB,
+      optionC,
+      optionD,
+      correctAnswer,
+    })
 
-    // mysql2 returns ResultSetHeader with insertId property
-    const insertId = result?.insertId || result?.[0]?.insertId
-
-    if (!insertId) {
-      throw new Error("Failed to get insert ID from database")
-    }
-
-    const insertedQuestion = {
-      id: insertId.toString(),
+    return NextResponse.json({
+      id: insertedQuestion._id.toString(),
       text: trimmedText,
       options: optionKeys.map((key, index) => ({
         key,
         value: options[index].trim(),
       })),
       correctAnswer,
-    }
-
-    return NextResponse.json(insertedQuestion)
+    })
   } catch (error: any) {
     console.error("[v0] Add question error:", error)
     const errorMessage = error?.message || "Internal server error"

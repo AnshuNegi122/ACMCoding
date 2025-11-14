@@ -31,6 +31,7 @@ interface LeaderboardEntry {
   name: string
   email: string
   score: number
+  totalQuestions: number
   percentage: number
   date: string
 }
@@ -330,7 +331,7 @@ export default function AdminDashboard() {
                           <TableCell>{entry.name}</TableCell>
                           <TableCell className="text-sm text-muted-foreground">{entry.email}</TableCell>
                           <TableCell className="text-right font-semibold">
-                            {entry.score}/{entry.score + (5 - entry.score)}
+                            {entry.score}/{entry.totalQuestions}
                           </TableCell>
                           <TableCell className="text-right font-semibold text-primary">
                             {entry.percentage.toFixed(1)}%
